@@ -287,7 +287,7 @@
         let isDragging = false;
 
         const pdfPresetCategories = {
-            "1": { name: "メール・窓口・電話", color: "#f59e0b", icon: "✉️" },
+           "1": { name: "メール・窓口・電話", color: "#f59e0b", icon: "✉️" },
             "2": { name: "会議関係", color: "#3b82f6", icon: "👤" },
             "3": { name: "休憩", color: "#8b5cf6", icon: "📊" },
             "4": { name: "一般庶務", color: "#ef4444", icon: "⏱️" },
@@ -1058,6 +1058,23 @@
         }
 
         function escapeHtml(str) { return str ? str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : ''; }
+
+        // --- GLOBAL EXPOSURE (For Inline HTML call handlers) ---
+        window.deleteCategory = deleteCategory;
+        window.updateCategoryName = updateCategoryName;
+        window.updateCategoryColor = updateCategoryColor;
+        window.updateCategorySuggestions = updateCategorySuggestions;
+        window.openEditModal = openEditModal;
+
+        // Startup (Safely route app execution)
+        cacheDOM(); // 🎯 【修正】HTMLの各種要素を確実に取得する処理を追加
+        setupEventListeners();
+
+        if (isCloudSync) {
+            initAuth();
+        } else {
+            initLocalApp();
+        }
     </script>
 </body>
 </html>
