@@ -40,7 +40,6 @@
                         </svg>
                         <!-- Cloud Sync Status Indicator -->
                         <span id="sync-status-badge" class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5" title="ローカル保存モード">
-                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
                             <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500 border border-white"></span>
                         </span>
                     </div>
@@ -48,7 +47,7 @@
                         <h1 class="text-xl font-bold tracking-wider">校友会本部事務局 業務トラッカー</h1>
                         <p class="text-xs text-emerald-200 flex items-center gap-1">
                             <span>カスタムスケジューラ</span>
-                            <span id="sync-status-text" class="bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700">ローカル保存</span>
+                            <span id="sync-status-text" class="bg-amber-900/40 px-2 py-0.5 rounded text-[10px] text-amber-300 font-semibold border border-amber-700">ローカル保存</span>
                         </p>
                     </div>
                 </div>
@@ -116,7 +115,7 @@
             <!-- RIGHT SIDE -->
             <div class="lg:col-span-5 flex flex-col gap-6">
 
-                <!-- 2. STAMP PALETTE -->
+                <!-- 2. STAMP PALETTE (Moved to top of right side) -->
                 <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
                     <div class="flex justify-between items-center mb-3">
                         <div class="flex items-center gap-2">
@@ -292,21 +291,21 @@
         let isDragging = false;
 
         const pdfPresetCategories = {
-            "1": { name: "メール・窓口・電話", color: "#f59e0b", icon: "✉️" },
-            "2": { name: "会議関係", color: "#3b82f6", icon: "👤" },
-            "3": { name: "休憩", color: "#8b5cf6", icon: "📊" },
-            "4": { name: "一般庶務", color: "#ef4444", icon: "⏱️" },
-            "5": { name: "行事イベント参加", color: "#06b6d4", icon: "🗣️" },
-            "6": { name: "自己研鑽", color: "#10b981", icon: "📖" }
+            "1": { name: "メール対応・窓口問い合わせ", color: "#f59e0b", icon: "✉️" },
+            "2": { name: "会員名簿管理・データ修正", color: "#3b82f6", icon: "👤" },
+            "3": { name: "アンケート集計・とりまとめ分析", color: "#8b5cf6", icon: "📊" },
+            "4": { name: "行事進行・タイムプログラム管理", color: "#ef4444", icon: "⏱️" },
+            "5": { name: "地方支部(ブロック)連携・会議運営", color: "#06b6d4", icon: "🗣️" },
+            "6": { name: "広報物制作・発送管理(パンフレット)", color: "#10b981", icon: "📖" }
         };
 
         const pdfTaskSuggestions = {
-            "1": ["メール" , "電話", "窓口", "その他"],
-            "2": ["会議", "会合", "議事録", "資料作成・修正", "打合せ"],
-            "3": ["昼食", 散歩", "雑談", "その他"],
-            "4": ["書類整理", "スケジュール確認", "課内打合せ", "業務進捗確認", "資料等読込"],
-            "5": ["学内行事等", "その他"],
-            "6": ["AI", "create"その他"]
+            "1": ["問い合わせメール返信対応", "証明書発行の窓口案内", "来客案内・学内取次", "電話問い合わせ対応"],
+            "2": ["「めいま」住所変更データ登録", "重複会員データのクレンジング処理", "不着返送ハガキのステータス変更", "卒業生名簿マスター同期"],
+            "3": ["イベント満足度アンケート集計入力", "アンケート自由記述のテキストマイニング", "調査結果のデータとりまとめ"],
+            "4": ["総会当日の「タイムプログラム」調整", "委員会進行スケジュールの策定", "周年行事アウトラインの進行確認"],
+            "5": ["「地域ブロック」支部総会の実施支援", "事務局ミーティング・ヒアリング", "役員会出欠とりまとめの確認"],
+            "6": ["「パンフレット」原稿チェック・校正", "会報誌発送用宛名ラベル印刷", "案内チラシの封入・発送作業"]
         };
 
         let categories = { ...pdfPresetCategories };
@@ -332,6 +331,7 @@
         const syncBadge = document.getElementById('sync-status-badge');
         const syncText = document.getElementById('sync-status-text');
 
+        // Verify if environment config is loaded and secure
         if (typeof __firebase_config !== 'undefined' && __firebase_config) {
             try {
                 const firebaseConfig = JSON.parse(__firebase_config);
@@ -390,7 +390,7 @@
 
         // --- AUTH & DATA LIFECYCLE ---
         async function initAuth() {
-            if (!isCloudSync) {
+            if (!isCloudSync || !auth) {
                 initLocalApp();
                 return;
             }
@@ -433,27 +433,30 @@
         }
 
         // Setup real-time listeners upon successful Authentication
-        onAuthStateChanged(auth, (currentUser) => {
-            if (currentUser) {
-                user = currentUser;
-                if (syncBadge && syncText) {
-                    syncBadge.innerHTML = `
-                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                        <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border border-white"></span>
-                    `;
-                    syncText.textContent = "クラウド同期中";
-                    syncText.className = "bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700";
+        // [CRITICAL FIX]: Guard listeners with isCloudSync and auth checks to prevent 404/crash on normal browsers
+        if (isCloudSync && auth) {
+            onAuthStateChanged(auth, (currentUser) => {
+                if (currentUser) {
+                    user = currentUser;
+                    if (syncBadge && syncText) {
+                        syncBadge.innerHTML = `
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border border-white"></span>
+                        `;
+                        syncText.textContent = "クラウド同期中";
+                        syncText.className = "bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700";
+                    }
+                    setupCloudListeners();
+                } else {
+                    user = null;
+                    initLocalApp();
                 }
-                setupCloudListeners();
-            } else {
-                user = null;
-                if (isCloudSync) initLocalApp();
-            }
-        });
+            });
+        }
 
-        // Setup Firestore Subscribers (RULE 1 & RULE 2 compliant)
+        // Setup Firestore Subscribers
         function setupCloudListeners() {
-            if (!user) return;
+            if (!user || !db) return;
 
             // 1. Categories config sync
             const configDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
@@ -463,7 +466,6 @@
                     categories = data.categories || { ...pdfPresetCategories };
                     taskSuggestions = data.suggestions || { ...pdfTaskSuggestions };
                 } else {
-                    // Initialize document if not existing
                     setDoc(configDocRef, {
                         categories: pdfPresetCategories,
                         suggestions: pdfTaskSuggestions
@@ -489,7 +491,7 @@
 
         // Save operations with fallback
         function saveDb() {
-            if (isCloudSync && user) {
+            if (isCloudSync && user && db) {
                 const dayData = work_db[activeDate] || {};
                 const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
                 setDoc(docRef, dayData).catch(err => console.error("Cloud save log failed:", err));
@@ -500,7 +502,7 @@
         }
 
         function saveCategories() {
-            if (isCloudSync && user) {
+            if (isCloudSync && user && db) {
                 const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
                 setDoc(docRef, {
                     categories: categories,
@@ -947,7 +949,7 @@
             todayBtn.onclick = () => { activeDate = new Date().toISOString().split('T')[0]; currentDateInput.value = activeDate; loadAttendanceAndEvent(); renderScheduleTable(); updateAnalytics(); };
             clearDayBtn.onclick = () => { 
                 if(confirm("本日の記録（勤怠や予定情報を含む）をすべてクリアしますか？")) { 
-                    if (isCloudSync && user) {
+                    if (isCloudSync && user && db) {
                         const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
                         setDoc(docRef, {});
                     } else {
@@ -979,8 +981,19 @@
             modalDeleteBtn.onclick = deleteModalChanges;
 
             exportMonthBtn.onclick = () => { 
-                navigator.clipboard.writeText(generateTsvPreview()); 
-                showToast("📋 今月分のデータをコピーしました！Excelに貼り付け可能です。");
+                // document.execCommand falls back here if navigator clipboard isn't supported in direct environments
+                const text = generateTsvPreview();
+                const tempTextarea = document.createElement("textarea");
+                tempTextarea.value = text;
+                document.body.appendChild(tempTextarea);
+                tempTextarea.select();
+                try {
+                    document.execCommand("copy");
+                    showToast("📋 今月分のデータをコピーしました！Excelに貼り付け可能です。");
+                } catch (err) {
+                    console.error("Copy failed", err);
+                }
+                document.body.removeChild(tempTextarea);
             };
 
             exportDayBtn.onclick = () => {
@@ -989,8 +1002,17 @@
                     alert("本日分のデータが何も入力されていません。");
                     return;
                 }
-                navigator.clipboard.writeText(result.content);
-                showToast("📋 本日分のデータのみをコピーしました！Excelに貼り付け可能です。");
+                const tempTextarea = document.createElement("textarea");
+                tempTextarea.value = result.content;
+                document.body.appendChild(tempTextarea);
+                tempTextarea.select();
+                try {
+                    document.execCommand("copy");
+                    showToast("📋 本日分のデータのみをコピーしました！Excelに貼り付け可能です。");
+                } catch (err) {
+                    console.error("Copy failed", err);
+                }
+                document.body.removeChild(tempTextarea);
             };
         }
 
@@ -1015,8 +1037,12 @@
         window.updateCategorySuggestions = updateCategorySuggestions;
         window.openEditModal = openEditModal;
 
-        // Startup
-        initAuth();
+        // Startup (Safely route app execution)
+        if (isCloudSync) {
+            initAuth();
+        } else {
+            initLocalApp();
+        }
     </script>
 </body>
 </html>
