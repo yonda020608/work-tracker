@@ -277,12 +277,8 @@
         </div>
     </div>
 
-    <!-- JAVASCRIPT LOGIC (Firebase Integration & Modularization) -->
-    <script type="module">
-        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
-        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
-        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
-
+    <!-- JAVASCRIPT LOGIC (Robust Offline-First Architecture) -->
+    <script>
         // --- STATE & CONSTANTS ---
         let activeDate = new Date().toISOString().split('T')[0];
         let selectedStampId = "1";
@@ -317,108 +313,98 @@
             timeSlots.push(`${hStr}:00`, `${hStr}:30`);
         }
 
-        // Local Work DB Backup (Failsafe)
-        let work_db = JSON.parse(localStorage.getItem('alumni_work_log_db')) || {};
+        // --- SAFE STORAGE WRAPPERS (ブラウザ設定によるエラー停止を防止) ---
+        function getLocalDB() {
+            try { return JSON.parse(localStorage.getItem('alumni_work_log_db')) || {}; } catch(e) { return {}; }
+        }
+        function saveLocalDB(data) {
+            try { localStorage.setItem('alumni_work_log_db', JSON.stringify(data)); } catch(e) { console.warn("LocalStorage disabled", e); }
+        }
+        function getLocalCats() {
+            try { return JSON.parse(localStorage.getItem('alumni_work_log_categories')); } catch(e) { return null; }
+        }
+        function getLocalSuggs() {
+            try { return JSON.parse(localStorage.getItem('alumni_work_log_suggestions')); } catch(e) { return null; }
+        }
+        function saveLocalConfig(cats, suggs) {
+            try { 
+                localStorage.setItem('alumni_work_log_categories', JSON.stringify(cats)); 
+                localStorage.setItem('alumni_work_log_suggestions', JSON.stringify(suggs)); 
+            } catch(e) { console.warn("LocalStorage disabled", e); }
+        }
 
-        // --- FIREBASE SECURITY CLOUD CONFIGURATION ---
+        let work_db = getLocalDB();
+
+        // --- CLOUD STATE ---
         let isCloudSync = false;
         let user = null;
+        let firebaseDb = null;
+        let fsMod = null; 
         const appId = typeof __app_id !== 'undefined' ? __app_id : 'alumni-work-tracker';
-        
-        let app, auth, db;
-        
-        // Setup Sync Status Badges
-        const syncBadge = document.getElementById('sync-status-badge');
-        const syncText = document.getElementById('sync-status-text');
-
-        // Verify if environment config is loaded and secure
-        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
-            try {
-                const firebaseConfig = JSON.parse(__firebase_config);
-                app = initializeApp(firebaseConfig);
-                auth = getAuth(app);
-                db = getFirestore(app);
-                isCloudSync = true;
-            } catch (e) {
-                console.error("Firebase init failed, switching to local storage mode:", e);
-                isCloudSync = false;
-            }
-        }
 
         // --- DOM ELEMENTS ---
-        const currentDateInput = document.getElementById('current-date-input');
-        const prevDateBtn = document.getElementById('prev-date-btn');
-        const nextDateBtn = document.getElementById('next-date-btn');
-        const todayBtn = document.getElementById('today-btn');
-        const tableDateTitle = document.getElementById('table-date-title');
-        const categoryPaletteContainer = document.getElementById('category-palette');
-        const scheduleRowsContainer = document.getElementById('schedule-rows-container');
-        const clearDayBtn = document.getElementById('clear-day-btn');
-        const resetPdfPresetsBtn = document.getElementById('reset-pdf-presets-btn');
+        let currentDateInput, prevDateBtn, nextDateBtn, todayBtn, tableDateTitle, categoryPaletteContainer, scheduleRowsContainer, clearDayBtn, resetPdfPresetsBtn;
+        let editableCategoriesList, newCatNameInput, newCatColorInput, newCatSuggestionsInput, addCatBtn;
+        let attendanceStart, attendanceEnd, dailyEventInput, btnPresetClear;
+        let editModal, modalStartTimeLabel, modalEndTimeSelect, modalCategorySelect, modalDetailInput, modalNotesInput;
+        let modalCancelBtn, modalCloseBtn, modalSaveBtn, modalDeleteBtn, suggestionPillsContainer;
+        let exportMonthBtn, exportDayBtn, copyFeedback, tsvPreview, analyticsRange, noDataMsg, chartParent, breakdownList;
 
-        const editableCategoriesList = document.getElementById('editable-categories-list');
-        const newCatNameInput = document.getElementById('new-cat-name');
-        const newCatColorInput = document.getElementById('new-cat-color');
-        const newCatSuggestionsInput = document.getElementById('new-cat-suggestions');
-        const addCatBtn = document.getElementById('add-cat-btn');
+        function cacheDOM() {
+            currentDateInput = document.getElementById('current-date-input');
+            prevDateBtn = document.getElementById('prev-date-btn');
+            nextDateBtn = document.getElementById('next-date-btn');
+            todayBtn = document.getElementById('today-btn');
+            tableDateTitle = document.getElementById('table-date-title');
+            categoryPaletteContainer = document.getElementById('category-palette');
+            scheduleRowsContainer = document.getElementById('schedule-rows-container');
+            clearDayBtn = document.getElementById('clear-day-btn');
+            resetPdfPresetsBtn = document.getElementById('reset-pdf-presets-btn');
 
-        const attendanceStart = document.getElementById('attendance-start');
-        const attendanceEnd = document.getElementById('attendance-end');
-        const dailyEventInput = document.getElementById('daily-event');
-        const btnPresetClear = document.getElementById('btn-preset-clear');
+            editableCategoriesList = document.getElementById('editable-categories-list');
+            newCatNameInput = document.getElementById('new-cat-name');
+            newCatColorInput = document.getElementById('new-cat-color');
+            newCatSuggestionsInput = document.getElementById('new-cat-suggestions');
+            addCatBtn = document.getElementById('add-cat-btn');
 
-        const editModal = document.getElementById('edit-modal');
-        const modalStartTimeLabel = document.getElementById('modal-start-time-label');
-        const modalEndTimeSelect = document.getElementById('modal-end-time-select');
-        const modalCategorySelect = document.getElementById('modal-category-select');
-        const modalDetailInput = document.getElementById('modal-detail-input');
-        const modalNotesInput = document.getElementById('modal-notes-input');
-        const modalCancelBtn = document.getElementById('modal-cancel-btn');
-        const modalCloseBtn = document.getElementById('close-modal-btn');
-        const modalSaveBtn = document.getElementById('modal-save-btn');
-        const modalDeleteBtn = document.getElementById('modal-delete-btn');
-        const suggestionPillsContainer = document.getElementById('suggestion-pills');
+            attendanceStart = document.getElementById('attendance-start');
+            attendanceEnd = document.getElementById('attendance-end');
+            dailyEventInput = document.getElementById('daily-event');
+            btnPresetClear = document.getElementById('btn-preset-clear');
 
-        const exportMonthBtn = document.getElementById('export-month-btn');
-        const exportDayBtn = document.getElementById('export-day-btn');
-        const copyFeedback = document.getElementById('copy-feedback');
-        const tsvPreview = document.getElementById('tsv-preview');
-        const analyticsRange = document.getElementById('analytics-range');
-        const noDataMsg = document.getElementById('no-data-msg');
-        const chartParent = document.getElementById('chart-parent');
-        const breakdownList = document.getElementById('breakdown-list');
+            editModal = document.getElementById('edit-modal');
+            modalStartTimeLabel = document.getElementById('modal-start-time-label');
+            modalEndTimeSelect = document.getElementById('modal-end-time-select');
+            modalCategorySelect = document.getElementById('modal-category-select');
+            modalDetailInput = document.getElementById('modal-detail-input');
+            modalNotesInput = document.getElementById('modal-notes-input');
+            modalCancelBtn = document.getElementById('modal-cancel-btn');
+            modalCloseBtn = document.getElementById('close-modal-btn');
+            modalSaveBtn = document.getElementById('modal-save-btn');
+            modalDeleteBtn = document.getElementById('modal-delete-btn');
+            suggestionPillsContainer = document.getElementById('suggestion-pills');
 
-        // --- AUTH & DATA LIFECYCLE ---
-        async function initAuth() {
-            if (!isCloudSync || !auth) {
-                initLocalApp();
-                return;
-            }
-            try {
-                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
-                    await signInWithCustomToken(auth, __initial_auth_token);
-                } else {
-                    await signInAnonymously(auth);
-                }
-            } catch (err) {
-                console.error("Auth initialization failed, fallback to local:", err);
-                isCloudSync = false;
-                initLocalApp();
-            }
+            exportMonthBtn = document.getElementById('export-month-btn');
+            exportDayBtn = document.getElementById('export-day-btn');
+            copyFeedback = document.getElementById('copy-feedback');
+            tsvPreview = document.getElementById('tsv-preview');
+            analyticsRange = document.getElementById('analytics-range');
+            noDataMsg = document.getElementById('no-data-msg');
+            chartParent = document.getElementById('chart-parent');
+            breakdownList = document.getElementById('breakdown-list');
         }
 
+        // --- CORE LIFECYCLE ---
         function initLocalApp() {
-            const storedCats = localStorage.getItem('alumni_work_log_categories');
-            if (storedCats) {
-                categories = JSON.parse(storedCats);
-            }
-            const storedSuggestions = localStorage.getItem('alumni_work_log_suggestions');
-            if (storedSuggestions) {
-                taskSuggestions = JSON.parse(storedSuggestions);
-            }
+            const storedCats = getLocalCats();
+            if (storedCats) categories = storedCats;
+            const storedSuggs = getLocalSuggs();
+            if (storedSuggs) taskSuggestions = storedSuggs;
+            
             currentDateInput.value = activeDate;
             
-            // Set offline styles
+            const syncBadge = document.getElementById('sync-status-badge');
+            const syncText = document.getElementById('sync-status-text');
             if (syncBadge && syncText) {
                 syncBadge.innerHTML = `<span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500 border border-white"></span>`;
                 syncText.textContent = "ローカル保存";
@@ -432,85 +418,95 @@
             updateAnalytics();
         }
 
-        // Setup real-time listeners upon successful Authentication
-        if (isCloudSync && auth) {
-            onAuthStateChanged(auth, (currentUser) => {
-                if (currentUser) {
-                    user = currentUser;
-                    if (syncBadge && syncText) {
-                        syncBadge.innerHTML = `
-                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                            <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border border-white"></span>
-                        `;
-                        syncText.textContent = "クラウド同期中";
-                        syncText.className = "bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700";
+        async function initCloudIfAvailable() {
+            if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+                try {
+                    // ダイナミックインポートでネットワーク遮断時のクラッシュを防止
+                    const fbApp = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js");
+                    const fbAuth = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js");
+                    fsMod = await import("https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js");
+                    
+                    const app = fbApp.initializeApp(JSON.parse(__firebase_config));
+                    const auth = fbAuth.getAuth(app);
+                    firebaseDb = fsMod.getFirestore(app);
+                    isCloudSync = true;
+                    
+                    if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                        await fbAuth.signInWithCustomToken(auth, __initial_auth_token);
+                    } else {
+                        await fbAuth.signInAnonymously(auth);
                     }
-                    setupCloudListeners();
-                } else {
-                    user = null;
-                    initLocalApp();
+                    
+                    fbAuth.onAuthStateChanged(auth, (currentUser) => {
+                        if (currentUser) {
+                            user = currentUser;
+                            const syncBadge = document.getElementById('sync-status-badge');
+                            const syncText = document.getElementById('sync-status-text');
+                            if (syncBadge && syncText) {
+                                syncBadge.innerHTML = `
+                                    <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                                    <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border border-white"></span>
+                                `;
+                                syncText.textContent = "クラウド同期中";
+                                syncText.className = "bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700";
+                            }
+                            setupCloudListeners();
+                        } else {
+                            user = null;
+                        }
+                    });
+                } catch (e) {
+                    console.error("Cloud Init Failed (Running Locally):", e);
                 }
-            });
+            }
         }
 
-        // Setup Firestore Subscribers
         function setupCloudListeners() {
-            if (!user || !db) return;
+            if (!user || !firebaseDb || !fsMod) return;
 
-            // 1. Categories config sync
-            const configDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
-            onSnapshot(configDocRef, (snap) => {
+            const configDocRef = fsMod.doc(firebaseDb, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
+            fsMod.onSnapshot(configDocRef, (snap) => {
                 if (snap.exists()) {
                     const data = snap.data();
                     categories = data.categories || { ...pdfPresetCategories };
                     taskSuggestions = data.suggestions || { ...pdfTaskSuggestions };
                 } else {
-                    setDoc(configDocRef, {
-                        categories: pdfPresetCategories,
-                        suggestions: pdfTaskSuggestions
-                    });
+                    fsMod.setDoc(configDocRef, { categories: pdfPresetCategories, suggestions: pdfTaskSuggestions });
                 }
                 renderCategoryPalette();
                 renderEditableCategories();
                 renderScheduleTable();
-            }, (err) => console.error("Cloud config sync error:", err));
+            }, (err) => console.error(err));
 
-            // 2. Schedule logs list sync
-            const logsColRef = collection(db, 'artifacts', appId, 'users', user.uid, 'work_logs');
-            onSnapshot(logsColRef, (querySnap) => {
+            const logsColRef = fsMod.collection(firebaseDb, 'artifacts', appId, 'users', user.uid, 'work_logs');
+            fsMod.onSnapshot(logsColRef, (querySnap) => {
                 work_db = {};
                 querySnap.forEach((docSnap) => {
                     work_db[docSnap.id] = docSnap.data();
                 });
+                saveLocalDB(work_db); // ローカルにもバックアップ
                 loadAttendanceAndEvent();
                 renderScheduleTable();
                 updateAnalytics();
-            }, (err) => console.error("Cloud logs sync error:", err));
+            }, (err) => console.error(err));
         }
 
-        // Save operations with fallback
         function saveDb() {
-            if (isCloudSync && user && db) {
+            if (isCloudSync && user && firebaseDb && fsMod) {
                 const dayData = work_db[activeDate] || {};
-                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
-                setDoc(docRef, dayData).catch(err => console.error("Cloud save log failed:", err));
-            } else {
-                localStorage.setItem('alumni_work_log_db', JSON.stringify(work_db));
+                const docRef = fsMod.doc(firebaseDb, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
+                fsMod.setDoc(docRef, dayData).catch(err => console.error(err));
             }
+            saveLocalDB(work_db);
             updateAnalytics();
         }
 
         function saveCategories() {
-            if (isCloudSync && user && db) {
-                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
-                setDoc(docRef, {
-                    categories: categories,
-                    suggestions: taskSuggestions
-                }).catch(err => console.error("Cloud save config failed:", err));
-            } else {
-                localStorage.setItem('alumni_work_log_categories', JSON.stringify(categories));
-                localStorage.setItem('alumni_work_log_suggestions', JSON.stringify(taskSuggestions));
+            if (isCloudSync && user && firebaseDb && fsMod) {
+                const docRef = fsMod.doc(firebaseDb, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
+                fsMod.setDoc(docRef, { categories: categories, suggestions: taskSuggestions }).catch(err => console.error(err));
             }
+            saveLocalConfig(categories, taskSuggestions);
             renderCategoryPalette();
             renderScheduleTable();
             renderEditableCategories();
@@ -605,7 +601,6 @@
                     }
                 }
 
-                // Mouse / Touch Event Drag Handlers
                 contentCol.onmousedown = () => { isDragging = true; applyStampToSlot(time); };
                 contentCol.onmouseenter = () => { if (isDragging) applyStampToSlot(time); };
                 contentCol.ontouchstart = (e) => { isDragging = true; applyStampToSlot(time); e.preventDefault(); };
@@ -632,8 +627,7 @@
                 scheduleRowsContainer.appendChild(row);
             });
 
-            const dateObj = new Date(activeDate);
-            tableDateTitle.textContent = `${dateObj.getFullYear()}年${dateObj.getMonth() + 1}月${dateObj.getDate()}日 のタイムスケジュール`;
+            tableDateTitle.textContent = `${new Date(activeDate).getFullYear()}年${new Date(activeDate).getMonth() + 1}月${new Date(activeDate).getDate()}日 のタイムスケジュール`;
         }
 
         function applyStampToSlot(time) {
@@ -745,39 +739,39 @@
                 row.innerHTML = `
                     <div class="flex items-center gap-2">
                         <span class="font-bold text-slate-500 w-4 text-center">${id}</span>
-                        <input type="text" value="${escapeHtml(cat.name)}" class="flex-grow p-1.5 border border-slate-200 rounded bg-white font-medium focus:ring-1 focus:ring-teal-500 outline-none" onchange="updateCategoryName('${id}', this.value)" placeholder="カテゴリ名" />
-                        <input type="color" value="${cat.color}" class="w-8 h-8 p-0 border border-slate-200 rounded cursor-pointer flex-shrink-0" onchange="updateCategoryColor('${id}', this.value)" />
-                        <button class="text-red-500 hover:text-red-700 p-1.5 transition flex-shrink-0 bg-red-50 hover:bg-red-100 rounded" onclick="deleteCategory('${id}')" title="削除">
+                        <input type="text" value="${escapeHtml(cat.name)}" class="flex-grow p-1.5 border border-slate-200 rounded bg-white font-medium focus:ring-1 focus:ring-teal-500 outline-none" onchange="window.updateCategoryName('${id}', this.value)" placeholder="カテゴリ名" />
+                        <input type="color" value="${cat.color}" class="w-8 h-8 p-0 border border-slate-200 rounded cursor-pointer flex-shrink-0" onchange="window.updateCategoryColor('${id}', this.value)" />
+                        <button class="text-red-500 hover:text-red-700 p-1.5 transition flex-shrink-0 bg-red-50 hover:bg-red-100 rounded" onclick="window.deleteCategory('${id}')" title="削除">
                             <svg class="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7" /></svg>
                         </button>
                     </div>
                     <div class="flex items-center gap-2 pl-6">
                         <span class="text-[10px] font-bold text-slate-400 whitespace-nowrap">サジェスト:</span>
-                        <input type="text" value="${escapeHtml(suggestionsStr)}" class="flex-grow p-1.5 border border-slate-200 rounded bg-white text-[10px] focus:ring-1 focus:ring-teal-500 outline-none" onchange="updateCategorySuggestions('${id}', this.value)" placeholder="カンマ(,)区切りで入力" />
+                        <input type="text" value="${escapeHtml(suggestionsStr)}" class="flex-grow p-1.5 border border-slate-200 rounded bg-white text-[10px] focus:ring-1 focus:ring-teal-500 outline-none" onchange="window.updateCategorySuggestions('${id}', this.value)" placeholder="カンマ(,)区切りで入力" />
                     </div>
                 `;
                 editableCategoriesList.appendChild(row);
             });
         }
 
-        function updateCategoryName(id, newName) {
+        window.updateCategoryName = function(id, newName) {
             if (!newName.trim()) return;
             categories[id].name = newName.trim();
             saveCategories();
         }
 
-        function updateCategoryColor(id, newColor) {
+        window.updateCategoryColor = function(id, newColor) {
             categories[id].color = newColor;
             saveCategories();
         }
 
-        function updateCategorySuggestions(id, newSuggestionsStr) {
+        window.updateCategorySuggestions = function(id, newSuggestionsStr) {
             const arr = newSuggestionsStr.split(',').map(s => s.trim()).filter(s => s);
             taskSuggestions[id] = arr;
             saveCategories();
         }
 
-        function deleteCategory(id) {
+        window.deleteCategory = function(id) {
             if (Object.keys(categories).length <= 1) {
                 alert("最後の1つのカテゴリは削除できません。");
                 return;
@@ -940,8 +934,7 @@
             return { content: tsv, count: rowCount };
         }
 
-        // --- CALENDAR & DATE SELECTION IMMERSION [CRITICAL FIX] ---
-        // 🎯 カレンダーピッカー上で日付を選択・タップした「その瞬間」に画面を即座に遷移させます
+        // --- CALENDAR & DATE SELECTION ---
         function handleDateChange(e) {
             const val = e.target.value;
             if (!val) return;
@@ -951,11 +944,9 @@
             updateAnalytics();
         }
 
-        // 🎯 前日・翌日ボタン移動時のタイムゾーン起因のズレを完全に防ぎます
         function changeDate(days) {
             const parts = activeDate.split('-');
             if (parts.length !== 3) return;
-            // ローカル現地時間ベースで安全にオブジェクトを作成し加減算
             const d = new Date(parseInt(parts[0]), parseInt(parts[1]) - 1, parseInt(parts[2]));
             d.setDate(d.getDate() + days);
             
@@ -970,31 +961,43 @@
             updateAnalytics();
         }
 
+        // 🎯 [一番重要] ブラウザ描画完了後に即時全ボタンの機能と画面描画を有効化
+        window.onload = function() {
+            cacheDOM(); // HTML要素を確実に取得
+            setupEventListeners(); // カレンダーやボタンのクリック検知をセット
+            
+            // ネットワーク通信を待たずにUIを100%起動
+            initLocalApp();
+            
+            // バックグラウンドでクラウド通信を試行
+            initCloudIfAvailable();
+        };
+
         function setupEventListeners() {
             window.addEventListener('mouseup', () => isDragging = false);
             
-            // 🎯 カレンダー選択時の更新を高感度検知（changeイベントとinputイベントの両対応で瞬時に切り替え）
+            // カレンダー選択時の即時切り替えを担保
             currentDateInput.addEventListener('input', handleDateChange);
             currentDateInput.addEventListener('change', handleDateChange);
 
             prevDateBtn.onclick = () => { changeDate(-1); };
             nextDateBtn.onclick = () => { changeDate(1); };
             todayBtn.onclick = () => { activeDate = new Date().toISOString().split('T')[0]; currentDateInput.value = activeDate; loadAttendanceAndEvent(); renderScheduleTable(); updateAnalytics(); };
+            
             clearDayBtn.onclick = () => { 
                 if(confirm("本日の記録（勤怠や予定情報を含む）をすべてクリアしますか？")) { 
-                    if (isCloudSync && user && db) {
-                        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
-                        setDoc(docRef, {});
-                    } else {
-                        delete work_db[activeDate];
-                        saveDb();
+                    if (isCloudSync && user && firebaseDb && fsMod) {
+                        const docRef = fsMod.doc(firebaseDb, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
+                        fsMod.setDoc(docRef, {});
                     }
+                    delete work_db[activeDate];
+                    saveDb();
                     loadAttendanceAndEvent(); 
                     renderScheduleTable(); 
                 } 
             };
-            resetPdfPresetsBtn.onclick = resetCategoriesToPresets;
             
+            resetPdfPresetsBtn.onclick = resetCategoriesToPresets;
             if(addCatBtn) addCatBtn.onclick = addNewCategory;
 
             attendanceStart.onchange = saveAttendanceAndEvent;
@@ -1055,22 +1058,6 @@
         }
 
         function escapeHtml(str) { return str ? str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : ''; }
-
-        // --- GLOBAL EXPOSURE (For Inline HTML call handlers) ---
-        window.deleteCategory = deleteCategory;
-        window.updateCategoryName = updateCategoryName;
-        window.updateCategoryColor = updateCategoryColor;
-        window.updateCategorySuggestions = updateCategorySuggestions;
-        window.openEditModal = openEditModal;
-
-        // Startup (Safely route app execution)
-        setupEventListeners();
-
-        if (isCloudSync) {
-            initAuth();
-        } else {
-            initLocalApp();
-        }
     </script>
 </body>
 </html>
