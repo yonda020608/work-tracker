@@ -34,14 +34,22 @@
         <header class="bg-gradient-to-r from-emerald-800 to-teal-900 text-white shadow-md px-6 py-4">
             <div class="max-w-7xl mx-auto flex flex-col md:flex-row justify-between items-center gap-4">
                 <div class="flex items-center gap-3">
-                    <div class="bg-white/10 p-2 rounded-lg">
+                    <div class="bg-white/10 p-2 rounded-lg relative">
                         <svg class="w-8 h-8 text-emerald-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                             <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 6.253v13m0-13C10.832 5.477 9.246 5 7.5 5S4.168 5.477 3 6.253v13C4.168 18.477 5.754 18 7.5 18s3.332.477 4.5 1.253m0-13C13.168 5.477 14.754 5 16.5 5c1.747 0 3.332.477 4.5 1.253v13C19.832 18.477 18.247 18 16.5 18c-1.746 0-3.332.477-4.5 1.253" />
                         </svg>
+                        <!-- Cloud Sync Status Indicator -->
+                        <span id="sync-status-badge" class="absolute -bottom-1 -right-1 flex h-3.5 w-3.5" title="ローカル保存モード">
+                            <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                            <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500 border border-white"></span>
+                        </span>
                     </div>
                     <div>
                         <h1 class="text-xl font-bold tracking-wider">校友会本部事務局 業務トラッカー</h1>
-                        <p class="text-xs text-emerald-200">カスタムスケジューラ</p>
+                        <p class="text-xs text-emerald-200 flex items-center gap-1">
+                            <span>カスタムスケジューラ</span>
+                            <span id="sync-status-text" class="bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700">ローカル保存</span>
+                        </p>
                     </div>
                 </div>
 
@@ -63,7 +71,7 @@
             <!-- LEFT SIDE -->
             <div class="lg:col-span-7 flex flex-col gap-6">
 
-                <!-- 1. TIME SCHEDULE TABLE (Moved to Top) -->
+                <!-- 1. TIME SCHEDULE TABLE -->
                 <div class="bg-white rounded-xl shadow-sm border border-slate-200 overflow-hidden flex-grow flex flex-col">
                     <div class="bg-slate-50 px-4 py-3 border-b border-slate-200 flex justify-between items-center">
                         <div class="flex items-center gap-2">
@@ -108,7 +116,7 @@
             <!-- RIGHT SIDE -->
             <div class="lg:col-span-5 flex flex-col gap-6">
 
-                <!-- 2. STAMP PALETTE (Moved to top of right side) -->
+                <!-- 2. STAMP PALETTE -->
                 <div class="bg-white p-4 rounded-xl shadow-sm border border-slate-200">
                     <div class="flex justify-between items-center mb-3">
                         <div class="flex items-center gap-2">
@@ -190,7 +198,7 @@
                     <div id="breakdown-list" class="mt-4 border-t border-slate-100 pt-3 space-y-1.5 text-xs text-slate-600 max-h-[160px] overflow-y-auto"></div>
                 </div>
 
-                <!-- 5. EXCEL EXPORT (Moved to bottom of right side) -->
+                <!-- 5. EXCEL EXPORT -->
                 <div class="bg-white p-5 rounded-xl shadow-sm border border-slate-200">
                     <div class="flex items-center gap-2 mb-3">
                         <span class="inline-block w-2.5 h-5 bg-emerald-600 rounded"></span>
@@ -270,8 +278,13 @@
         </div>
     </div>
 
-    <!-- JAVASCRIPT LOGIC -->
-    <script>
+    <!-- JAVASCRIPT LOGIC (Firebase Integration & Modularization) -->
+    <script type="module">
+        import { initializeApp } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js";
+        import { getAuth, signInAnonymously, signInWithCustomToken, onAuthStateChanged } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js";
+        import { getFirestore, doc, setDoc, getDoc, collection, onSnapshot } from "https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js";
+
+        // --- STATE & CONSTANTS ---
         let activeDate = new Date().toISOString().split('T')[0];
         let selectedStampId = "1";
         let editingTimeSlot = null;
@@ -288,12 +301,12 @@
         };
 
         const pdfTaskSuggestions = {
-            "1": ["メール", "電話", "窓口", "その他"],
+            "1": ["メール" , "電話", "窓口", "その他"],
             "2": ["会議", "会合", "議事録", "資料作成・修正", "打合せ"],
-            "3": ["昼食", "散歩", "雑談", "その他"],
+            "3": ["昼食", 散歩", "雑談", "その他"],
             "4": ["書類整理", "スケジュール確認", "課内打合せ", "業務進捗確認", "資料等読込"],
             "5": ["学内行事等", "その他"],
-            "6": ["AIとか", "その他"]
+            "6": ["AI", "create"その他"]
         };
 
         let categories = { ...pdfPresetCategories };
@@ -305,8 +318,34 @@
             timeSlots.push(`${hStr}:00`, `${hStr}:30`);
         }
 
-        let db = JSON.parse(localStorage.getItem('alumni_work_log_db')) || {};
+        // Local Work DB Backup (Failsafe)
+        let work_db = JSON.parse(localStorage.getItem('alumni_work_log_db')) || {};
 
+        // --- FIREBASE SECURITY CLOUD CONFIGURATION ---
+        let isCloudSync = false;
+        let user = null;
+        const appId = typeof __app_id !== 'undefined' ? __app_id : 'alumni-work-tracker';
+        
+        let app, auth, db;
+        
+        // Setup Sync Status Badges
+        const syncBadge = document.getElementById('sync-status-badge');
+        const syncText = document.getElementById('sync-status-text');
+
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                isCloudSync = true;
+            } catch (e) {
+                console.error("Firebase init failed, switching to local storage mode:", e);
+                isCloudSync = false;
+            }
+        }
+
+        // --- DOM ELEMENTS ---
         const currentDateInput = document.getElementById('current-date-input');
         const prevDateBtn = document.getElementById('prev-date-btn');
         const nextDateBtn = document.getElementById('next-date-btn');
@@ -317,14 +356,12 @@
         const clearDayBtn = document.getElementById('clear-day-btn');
         const resetPdfPresetsBtn = document.getElementById('reset-pdf-presets-btn');
 
-        // カテゴリ編集のDOM
         const editableCategoriesList = document.getElementById('editable-categories-list');
         const newCatNameInput = document.getElementById('new-cat-name');
         const newCatColorInput = document.getElementById('new-cat-color');
         const newCatSuggestionsInput = document.getElementById('new-cat-suggestions');
         const addCatBtn = document.getElementById('add-cat-btn');
 
-        // 勤怠管理・日別イベントのDOM
         const attendanceStart = document.getElementById('attendance-start');
         const attendanceEnd = document.getElementById('attendance-end');
         const dailyEventInput = document.getElementById('daily-event');
@@ -351,7 +388,26 @@
         const chartParent = document.getElementById('chart-parent');
         const breakdownList = document.getElementById('breakdown-list');
 
-        function initApp() {
+        // --- AUTH & DATA LIFECYCLE ---
+        async function initAuth() {
+            if (!isCloudSync) {
+                initLocalApp();
+                return;
+            }
+            try {
+                if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                    await signInWithCustomToken(auth, __initial_auth_token);
+                } else {
+                    await signInAnonymously(auth);
+                }
+            } catch (err) {
+                console.error("Auth initialization failed, fallback to local:", err);
+                isCloudSync = false;
+                initLocalApp();
+            }
+        }
+
+        function initLocalApp() {
             const storedCats = localStorage.getItem('alumni_work_log_categories');
             if (storedCats) {
                 categories = JSON.parse(storedCats);
@@ -361,7 +417,14 @@
                 taskSuggestions = JSON.parse(storedSuggestions);
             }
             currentDateInput.value = activeDate;
-            setupEventListeners();
+            
+            // Set offline styles
+            if (syncBadge && syncText) {
+                syncBadge.innerHTML = `<span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-amber-500 border border-white"></span>`;
+                syncText.textContent = "ローカル保存";
+                syncText.className = "bg-amber-900/40 px-2 py-0.5 rounded text-[10px] text-amber-300 font-semibold border border-amber-700";
+            }
+
             loadAttendanceAndEvent();
             renderCategoryPalette();
             renderScheduleTable();
@@ -369,37 +432,105 @@
             updateAnalytics();
         }
 
+        // Setup real-time listeners upon successful Authentication
+        onAuthStateChanged(auth, (currentUser) => {
+            if (currentUser) {
+                user = currentUser;
+                if (syncBadge && syncText) {
+                    syncBadge.innerHTML = `
+                        <span class="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                        <span class="relative inline-flex rounded-full h-3.5 w-3.5 bg-emerald-500 border border-white"></span>
+                    `;
+                    syncText.textContent = "クラウド同期中";
+                    syncText.className = "bg-emerald-900/40 px-2 py-0.5 rounded text-[10px] text-emerald-300 font-semibold border border-emerald-700";
+                }
+                setupCloudListeners();
+            } else {
+                user = null;
+                if (isCloudSync) initLocalApp();
+            }
+        });
+
+        // Setup Firestore Subscribers (RULE 1 & RULE 2 compliant)
+        function setupCloudListeners() {
+            if (!user) return;
+
+            // 1. Categories config sync
+            const configDocRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
+            onSnapshot(configDocRef, (snap) => {
+                if (snap.exists()) {
+                    const data = snap.data();
+                    categories = data.categories || { ...pdfPresetCategories };
+                    taskSuggestions = data.suggestions || { ...pdfTaskSuggestions };
+                } else {
+                    // Initialize document if not existing
+                    setDoc(configDocRef, {
+                        categories: pdfPresetCategories,
+                        suggestions: pdfTaskSuggestions
+                    });
+                }
+                renderCategoryPalette();
+                renderEditableCategories();
+                renderScheduleTable();
+            }, (err) => console.error("Cloud config sync error:", err));
+
+            // 2. Schedule logs list sync
+            const logsColRef = collection(db, 'artifacts', appId, 'users', user.uid, 'work_logs');
+            onSnapshot(logsColRef, (querySnap) => {
+                work_db = {};
+                querySnap.forEach((docSnap) => {
+                    work_db[docSnap.id] = docSnap.data();
+                });
+                loadAttendanceAndEvent();
+                renderScheduleTable();
+                updateAnalytics();
+            }, (err) => console.error("Cloud logs sync error:", err));
+        }
+
+        // Save operations with fallback
+        function saveDb() {
+            if (isCloudSync && user) {
+                const dayData = work_db[activeDate] || {};
+                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
+                setDoc(docRef, dayData).catch(err => console.error("Cloud save log failed:", err));
+            } else {
+                localStorage.setItem('alumni_work_log_db', JSON.stringify(work_db));
+            }
+            updateAnalytics();
+        }
+
         function saveCategories() {
-            localStorage.setItem('alumni_work_log_categories', JSON.stringify(categories));
-            localStorage.setItem('alumni_work_log_suggestions', JSON.stringify(taskSuggestions));
+            if (isCloudSync && user) {
+                const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'config', 'categories');
+                setDoc(docRef, {
+                    categories: categories,
+                    suggestions: taskSuggestions
+                }).catch(err => console.error("Cloud save config failed:", err));
+            } else {
+                localStorage.setItem('alumni_work_log_categories', JSON.stringify(categories));
+                localStorage.setItem('alumni_work_log_suggestions', JSON.stringify(taskSuggestions));
+            }
             renderCategoryPalette();
             renderScheduleTable();
             renderEditableCategories();
             updateAnalytics();
         }
 
-        // データを保存する関数
-        function saveDb() {
-            localStorage.setItem('alumni_work_log_db', JSON.stringify(db));
-            updateAnalytics();
-        }
-
-        // 勤怠データと日別イベントのロード
+        // --- SCHEDULING LOGIC ---
         function loadAttendanceAndEvent() {
-            const dayData = db[activeDate] || {};
+            const dayData = work_db[activeDate] || {};
             attendanceStart.value = dayData["_startTime"] || "";
             attendanceEnd.value = dayData["_endTime"] || "";
             dailyEventInput.value = dayData["_dailyEvent"] || "";
         }
 
-        // 勤怠データと日別イベントの保存
         function saveAttendanceAndEvent() {
-            if (!db[activeDate]) db[activeDate] = {};
-            db[activeDate]["_startTime"] = attendanceStart.value;
-            db[activeDate]["_endTime"] = attendanceEnd.value;
-            db[activeDate]["_dailyEvent"] = dailyEventInput.value;
+            if (!work_db[activeDate]) work_db[activeDate] = {};
+            work_db[activeDate]["_startTime"] = attendanceStart.value;
+            work_db[activeDate]["_endTime"] = attendanceEnd.value;
+            work_db[activeDate]["_dailyEvent"] = dailyEventInput.value;
             saveDb();
-            renderScheduleTable(); // 時間外のグレーアウト更新用
+            renderScheduleTable();
             generateTsvPreview();
         }
 
@@ -416,7 +547,7 @@
                 btn.onclick = () => { selectedStampId = id; renderCategoryPalette(); };
                 btn.innerHTML = `
                     <div class="flex items-center gap-1.5 justify-center">
-                        <span class="text-sm">${cat.icon}</span>
+                        <span class="text-sm">${cat.icon || '📌'}</span>
                         <span class="font-bold text-[11px] text-slate-700 truncate max-w-[150px]">${cat.name}</span>
                     </div>
                 `;
@@ -426,9 +557,8 @@
 
         function renderScheduleTable() {
             scheduleRowsContainer.innerHTML = '';
-            const dayData = db[activeDate] || {};
+            const dayData = work_db[activeDate] || {};
             
-            // 出退勤の設定時間を取得
             const sTime = dayData["_startTime"] || "";
             const eTime = dayData["_endTime"] || "";
 
@@ -439,7 +569,6 @@
                 const row = document.createElement('div');
                 row.className = "flex items-stretch hover:bg-slate-50/70 transition min-h-[48px]";
 
-                // 出退勤時間の範囲外判定
                 let isOutsideAttendance = false;
                 if (sTime && time < sTime) isOutsideAttendance = true;
                 if (eTime && time >= eTime) isOutsideAttendance = true;
@@ -449,7 +578,7 @@
                 }
 
                 const timeCol = document.createElement('div');
-                timeCol.className = `w-16 flex-shrink-0 flex items-center justify-center border-r border-slate-200 font-bold bg-slate-50/50 text-xs ${isOutsideAttendance ? 'text-slate-400' : 'text-slate-550'}`;
+                timeCol.className = `w-16 flex-shrink-0 flex items-center justify-center border-r border-slate-200 font-bold bg-slate-50/50 text-xs ${isOutsideAttendance ? 'text-slate-400' : 'text-slate-500'}`;
                 timeCol.textContent = time;
                 row.appendChild(timeCol);
 
@@ -475,7 +604,7 @@
                     }
                 }
 
-                // Drag and drop paint handlers
+                // Mouse / Touch Event Drag Handlers
                 contentCol.onmousedown = () => { isDragging = true; applyStampToSlot(time); };
                 contentCol.onmouseenter = () => { if (isDragging) applyStampToSlot(time); };
                 contentCol.ontouchstart = (e) => { isDragging = true; applyStampToSlot(time); e.preventDefault(); };
@@ -508,10 +637,10 @@
 
         function applyStampToSlot(time) {
             if (!time || !timeSlots.includes(time)) return;
-            if (!db[activeDate]) db[activeDate] = {};
-            const existing = db[activeDate][time] || {};
+            if (!work_db[activeDate]) work_db[activeDate] = {};
+            const existing = work_db[activeDate][time] || {};
             if (existing.categoryId !== selectedStampId) {
-                db[activeDate][time] = { categoryId: selectedStampId, detail: existing.detail || "", notes: existing.notes || "" };
+                work_db[activeDate][time] = { categoryId: selectedStampId, detail: existing.detail || "", notes: existing.notes || "" };
                 saveDb();
                 renderScheduleTable();
             }
@@ -519,7 +648,7 @@
 
         function openEditModal(time) {
             editingTimeSlot = time;
-            const slotData = db[activeDate]?.[time] || { categoryId: selectedStampId, detail: "", notes: "" };
+            const slotData = work_db[activeDate]?.[time] || { categoryId: selectedStampId, detail: "", notes: "" };
 
             modalStartTimeLabel.textContent = time;
             modalEndTimeSelect.innerHTML = '';
@@ -573,10 +702,10 @@
             let endIndex = timeSlots.indexOf(modalEndTimeSelect.value);
             if (endIndex === -1) endIndex = timeSlots.length;
 
-            if (!db[activeDate]) db[activeDate] = {};
+            if (!work_db[activeDate]) work_db[activeDate] = {};
             for (let i = startIndex; i <= endIndex; i++) {
                 if (timeSlots[i]) {
-                    db[activeDate][timeSlots[i]] = {
+                    work_db[activeDate][timeSlots[i]] = {
                         categoryId: modalCategorySelect.value,
                         detail: modalDetailInput.value.trim(),
                         notes: modalNotesInput.value.trim()
@@ -592,16 +721,16 @@
             let endIndex = timeSlots.indexOf(modalEndTimeSelect.value);
             if (endIndex === -1) endIndex = timeSlots.length;
 
-            if (db[activeDate]) {
+            if (work_db[activeDate]) {
                 for (let i = startIndex; i <= endIndex; i++) {
-                    if (timeSlots[i]) delete db[activeDate][timeSlots[i]];
+                    if (timeSlots[i]) delete work_db[activeDate][timeSlots[i]];
                 }
                 saveDb(); renderScheduleTable();
             }
             closeEditModal();
         }
 
-        // --- カテゴリ＆サジェスト編集機能 ---
+        // --- CATEGORIES & CONFIGURATION ---
         function renderEditableCategories() {
             if (!editableCategoriesList) return;
             editableCategoriesList.innerHTML = '';
@@ -653,10 +782,11 @@
                 return;
             }
             if (confirm(`カテゴリ「${categories[id].name}」を削除しますか？ このカテゴリが登録されているスケジュールは未割当に戻ります。`)) {
-                Object.keys(db).forEach(date => {
-                    Object.keys(db[date]).forEach(time => {
-                        if (db[date][time].categoryId === id) {
-                            delete db[date][time];
+                Object.keys(work_db).forEach(date => {
+                    Object.keys(work_db[date]).forEach(time => {
+                        if (time.startsWith("_")) return;
+                        if (work_db[date][time].categoryId === id) {
+                            delete work_db[date][time];
                         }
                     });
                 });
@@ -693,17 +823,26 @@
             saveCategories();
         }
 
+        function resetCategoriesToPresets() {
+            if (confirm("PDFの「主な業務」カテゴリーに上書きリセットしますか？\n※自分で追加・編集したカテゴリやサジェスト（業務内容）は消去されます。")) {
+                categories = { ...pdfPresetCategories };
+                taskSuggestions = { ...pdfTaskSuggestions };
+                saveCategories();
+            }
+        }
+
+        // --- ANALYTICS ---
         function updateAnalytics() {
             let totalHours = 0;
             const catTimes = {};
             Object.keys(categories).forEach(id => catTimes[id] = 0);
 
             const yearMonth = activeDate.substring(0, 7);
-            Object.keys(db).forEach(date => {
+            Object.keys(work_db).forEach(date => {
                 if (date.startsWith(yearMonth)) {
-                    Object.keys(db[date]).forEach(time => {
-                        if (time.startsWith("_")) return; // メタデータ除外
-                        const slot = db[date][time];
+                    Object.keys(work_db[date]).forEach(time => {
+                        if (time.startsWith("_")) return;
+                        const slot = work_db[date][time];
                         if (slot && categories[slot.categoryId]) {
                             catTimes[slot.categoryId] += 0.5;
                             totalHours += 0.5;
@@ -745,19 +884,19 @@
             generateTsvPreview();
         }
 
-        // 月間Excel貼り付け用のTSVテキストを生成（出勤・退勤・予定情報をマージ）
+        // --- EXPORTS ---
         function generateTsvPreview() {
             const yearMonth = activeDate.substring(0, 7);
             let tsv = "日付\t出勤時間\t退勤時間\t主な予定\t時間\t業務カテゴリ\t詳細\t備考\n";
-            Object.keys(db).filter(d => d.startsWith(yearMonth)).sort().forEach(date => {
-                const dayData = db[date];
+            Object.keys(work_db).filter(d => d.startsWith(yearMonth)).sort().forEach(date => {
+                const dayData = work_db[date];
                 const sTime = dayData["_startTime"] || "";
                 const eTime = dayData["_endTime"] || "";
                 const dailyEvent = dayData["_dailyEvent"] || "";
                 let hasSlots = false;
 
                 Object.keys(dayData).sort().forEach(time => {
-                    if (time.startsWith("_")) return; // メタデータ除外
+                    if (time.startsWith("_")) return;
                     const slot = dayData[time];
                     if (slot && categories[slot.categoryId]) {
                         tsv += `${date}\t${sTime}\t${eTime}\t${dailyEvent}\t${time}\t${categories[slot.categoryId].name}\t${slot.detail || ""}\t${slot.notes || ""}\n`;
@@ -765,7 +904,6 @@
                     }
                 });
 
-                // スロットは空白だが勤怠や予定だけ入力がある日も、1行としてExcelにエクスポートする
                 if (!hasSlots && (sTime || eTime || dailyEvent)) {
                     tsv += `${date}\t${sTime}\t${eTime}\t${dailyEvent}\t\t\t\t\n`;
                 }
@@ -774,10 +912,9 @@
             return tsv;
         }
 
-        // 本日分のExcel貼り付け用のTSVテキストを生成
         function generateTsvForToday() {
             let tsv = "日付\t出勤時間\t退勤時間\t主な予定\t時間\t業務カテゴリ\t詳細\t備考\n";
-            const dayData = db[activeDate] || {};
+            const dayData = work_db[activeDate] || {};
             const sTime = dayData["_startTime"] || "";
             const eTime = dayData["_endTime"] || "";
             const dailyEvent = dayData["_dailyEvent"] || "";
@@ -810,24 +947,21 @@
             todayBtn.onclick = () => { activeDate = new Date().toISOString().split('T')[0]; currentDateInput.value = activeDate; loadAttendanceAndEvent(); renderScheduleTable(); updateAnalytics(); };
             clearDayBtn.onclick = () => { 
                 if(confirm("本日の記録（勤怠や予定情報を含む）をすべてクリアしますか？")) { 
-                    delete db[activeDate]; 
-                    saveDb(); 
+                    if (isCloudSync && user) {
+                        const docRef = doc(db, 'artifacts', appId, 'users', user.uid, 'work_logs', activeDate);
+                        setDoc(docRef, {});
+                    } else {
+                        delete work_db[activeDate];
+                        saveDb();
+                    }
                     loadAttendanceAndEvent(); 
                     renderScheduleTable(); 
                 } 
             };
-            resetPdfPresetsBtn.onclick = () => { 
-                if(confirm("PDFの「主な業務」カテゴリーに上書きリセットしますか？\n※自分で追加・編集したカテゴリやサジェスト（業務内容）は消去されます。")) { 
-                    categories = { ...pdfPresetCategories }; 
-                    taskSuggestions = { ...pdfTaskSuggestions };
-                    saveCategories(); 
-                } 
-            };
+            resetPdfPresetsBtn.onclick = resetCategoriesToPresets;
             
-            // カテゴリ追加のアクション
             if(addCatBtn) addCatBtn.onclick = addNewCategory;
 
-            // 勤怠管理・日別予定のアクション
             attendanceStart.onchange = saveAttendanceAndEvent;
             attendanceEnd.onchange = saveAttendanceAndEvent;
             dailyEventInput.onchange = saveAttendanceAndEvent;
@@ -844,13 +978,11 @@
             modalSaveBtn.onclick = saveModalChanges;
             modalDeleteBtn.onclick = deleteModalChanges;
 
-            // 月間コピー
             exportMonthBtn.onclick = () => { 
                 navigator.clipboard.writeText(generateTsvPreview()); 
                 showToast("📋 今月分のデータをコピーしました！Excelに貼り付け可能です。");
             };
 
-            // 本日分コピー
             exportDayBtn.onclick = () => {
                 const result = generateTsvForToday();
                 if (result.count === 0) {
@@ -876,7 +1008,15 @@
 
         function escapeHtml(str) { return str ? str.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;") : ''; }
 
-        window.onload = initApp;
+        // --- GLOBAL EXPOSURE (For Inline HTML call handlers) ---
+        window.deleteCategory = deleteCategory;
+        window.updateCategoryName = updateCategoryName;
+        window.updateCategoryColor = updateCategoryColor;
+        window.updateCategorySuggestions = updateCategorySuggestions;
+        window.openEditModal = openEditModal;
+
+        // Startup
+        initAuth();
     </script>
 </body>
 </html>
